@@ -18,6 +18,12 @@ document.addEventListener('DOMContentLoaded', () => {
         showModal();
     } else {
         keyStatusText.textContent = "Using Saved API Key";
+        // Simple heuristic validation on load to ensure UI state is correct
+        if (savedKey.startsWith("sk-or-")) {
+            console.log("Detected OpenRouter Key");
+        } else if (savedKey.startsWith("AIza")) {
+            console.log("Detected Google Gemini Key");
+        }
     }
 });
 
@@ -32,6 +38,56 @@ function hideModal() {
     apiKeyModal.classList.remove('show');
 }
 
+async function validateApiKey(key) {
+    if (key.startsWith("sk-or-")) {
+        // Validation for OpenRouter
+        try {
+            const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${key}`,
+                    "Content-Type": "application/json",
+                    // Required for some free models on OpenRouter
+                    "HTTP-Referer": window.location.href,
+                    "X-Title": "ChatBuddy"
+                },
+                body: JSON.stringify({
+                    model: "google/gemma-2-9b-it:free", // Use a lightweight/free model for check
+                    messages: [{ role: "user", content: "Test" }]
+                })
+            });
+            // 401/403 usually means bad key. 200 is good. 402 is insufficient credits but key is valid-ish.
+            if (response.ok) return { valid: true };
+            const err = await response.json();
+            return { valid: false, error: err.error?.message || "Invalid OpenRouter Key" };
+        } catch (e) {
+            return { valid: false, error: "Network Error: " + e.message };
+        }
+    } else {
+        // Validation for Google Gemini
+        // We use the REST API directly: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=YOUR_API_KEY
+        // Note: 'gemini-3-flash-preview' might allow different endpoints, but let's stick to standard 1.5-flash for broader validation or 2.0-flash-exp
+        const model = "gemini-2.0-flash-exp";
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+
+        try {
+            const response = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    contents: [{ parts: [{ text: "Test" }] }]
+                })
+            });
+
+            const data = await response.json();
+            if (response.ok && !data.error) return { valid: true };
+            return { valid: false, error: data.error?.message || "Invalid Gemini Key" };
+        } catch (e) {
+            return { valid: false, error: "Network Error: " + e.message };
+        }
+    }
+}
+
 saveKeyBtn.addEventListener('click', async () => {
     const key = apiKeyInput.value.trim();
     if (!key) {
@@ -44,32 +100,19 @@ saveKeyBtn.addEventListener('click', async () => {
     saveKeyBtn.textContent = "Validating...";
     showValidation("Checking key...", "");
 
-    try {
-        const response = await fetch('/validate_key', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ api_key: key })
-        });
+    const result = await validateApiKey(key);
 
-        const data = await response.json();
-
-        if (data.valid) {
-            showValidation("Success! Key verified.", "success");
-            localStorage.setItem('google_api_key', key);
-            keyStatusText.textContent = "Key Saved & Verified";
-            setTimeout(() => {
-                hideModal();
-                saveKeyBtn.disabled = false;
-                saveKeyBtn.textContent = "Start Chatting";
-            }, 1000);
-        } else {
-            showValidation(data.error || "Invalid API Key", "error");
+    if (result.valid) {
+        showValidation("Success! Key verified.", "success");
+        localStorage.setItem('google_api_key', key);
+        keyStatusText.textContent = "Key Saved & Verified";
+        setTimeout(() => {
+            hideModal();
             saveKeyBtn.disabled = false;
-            saveKeyBtn.textContent = "Try Again";
-        }
-    } catch (error) {
-        console.error("Validation Error:", error);
-        showValidation("Error: " + error.message, "error");
+            saveKeyBtn.textContent = "Start Chatting";
+        }, 1000);
+    } else {
+        showValidation(result.error || "Invalid API Key", "error");
         saveKeyBtn.disabled = false;
         saveKeyBtn.textContent = "Try Again";
     }
@@ -109,6 +152,74 @@ userInput.addEventListener('keydown', function (e) {
 
 sendBtn.addEventListener('click', sendMessage);
 
+async function getChatResponse(message, history, apiKey) {
+    if (apiKey.startsWith("sk-or-")) {
+        // OpenRouter Logic
+        const url = "https://openrouter.ai/api/v1/chat/completions";
+        const messages = history.map(msg => ({
+            role: msg.role === 'bot' ? 'assistant' : msg.role, // normalize 'bot' to 'assistant'
+            content: msg.message || msg.content
+        }));
+        messages.push({ role: "user", content: message });
+
+        const response = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+                "HTTP-Referer": window.location.href,
+                "X-Title": "ChatBuddy"
+            },
+            body: JSON.stringify({
+                model: "google/gemini-2.0-flash-exp:free", // Default to a free model for general use
+                messages: messages
+            })
+        });
+
+        if (!response.ok) {
+            const err = await response.json();
+            throw new Error(err.error?.message || "OpenRouter API Error");
+        }
+        const data = await response.json();
+        return data.choices[0].message.content;
+
+    } else {
+        // Google Gemini Direct REST API Logic
+        const model = "gemini-2.0-flash-exp";
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+        // Convert history to Gemini format: { role: "user"|"model", parts: [{ text: "..." }] }
+        // Note: Gemini API is strict about turn order (user, model, user, model).
+        const contents = [];
+        history.forEach(msg => {
+            const role = (msg.role === 'user') ? 'user' : 'model';
+            // Simple validation to ensure alternating roles if strictly required, 
+            // but for now we just map. If history is messy, API might error.
+            contents.push({ role: role, parts: [{ text: msg.content || msg.message }] });
+        });
+        contents.push({ role: "user", parts: [{ text: message }] });
+
+        const response = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ contents: contents })
+        });
+
+        if (!response.ok) {
+            const err = await response.json();
+            throw new Error(err.error?.message || "Gemini API Error");
+        }
+        const data = await response.json();
+        // Extract text from response
+        // candidates[0].content.parts[0].text
+        if (data.candidates && data.candidates[0].content && data.candidates[0].content.parts) {
+            return data.candidates[0].content.parts[0].text;
+        } else {
+            throw new Error("Unexpected response format from Gemini");
+        }
+    }
+}
+
 async function sendMessage() {
     const message = userInput.value.trim();
     if (!message) return;
@@ -126,46 +237,32 @@ async function sendMessage() {
 
     // Add user message to UI
     appendMessage('user', message);
-    conversation.push({ role: 'user', content: message });
 
     // Show typing indicator
     showTypingIndicator();
 
     try {
-        const response = await fetch('/chat', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-User-API-Key': apiKey // Send the user's key
-            },
-            body: JSON.stringify({
-                message: message,
-                history: conversation.slice(-10) // Send last 10 messages for context
-            })
-        });
+        const reply = await getChatResponse(message, conversation, apiKey);
 
-        const data = await response.json();
         removeTypingIndicator();
+        appendMessage('bot', reply);
 
-        if (response.ok) {
-            appendMessage('bot', data.reply);
-            conversation.push({ role: 'assistant', content: data.reply });
-        } else {
-            const errorMessage = data.error || 'Sorry, I encountered an error. Please try again.';
-            appendMessage('bot', errorMessage);
-            console.error(data.error);
-
-            // If auth error, maybe prompt for key again
-            if (response.status === 401 || response.status === 403) {
-                appendMessage('bot', "It seems there's an issue with your API Key. Please update it.");
-                setTimeout(showModal, 2000);
-            }
-        }
+        // Update history
+        conversation.push({ role: 'user', content: message });
+        conversation.push({ role: 'assistant', content: reply });
 
     } catch (error) {
         removeTypingIndicator();
-        appendMessage('bot', 'Error: ' + error.message);
         console.error(error);
+        appendMessage('bot', 'Error: ' + error.message);
+
+        if (error.message.includes("key") || error.message.includes("401") || error.message.includes("403")) {
+            // Basic check if it looks like an auth error
+            setTimeout(() => {
+                showValidation("Auth Error: " + error.message, "error");
+                showModal();
+            }, 2000);
+        }
     }
 }
 
@@ -176,7 +273,15 @@ function appendMessage(role, text) {
 
     const contentDiv = document.createElement('div');
     contentDiv.classList.add('message-content');
-    contentDiv.innerText = text; // innerText avoids HTML injection
+
+    // Parse markdown-like ticks? For now, just text. 
+    // If you want markdown support, we'd need a library like marked.js
+    // For safety, we use innerText for user, and maybe allow simple formatting for bot?
+    // Let's stick to textContent for safety unless we import a sanitizer.
+    contentDiv.textContent = text;
+
+    // Simple improvement: Convert newlines to <br> for better display
+    contentDiv.innerHTML = text.replace(/\n/g, '<br>');
 
     const timeDiv = document.createElement('div');
     timeDiv.classList.add('message-time');
