@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChatBuddy</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+
+<body>
+    <div class="main-container">
+        <div class="chat-container">
+            <div class="chat-header">
+                <div class="logo">
+                    <i class="fa-solid fa-robot"></i>
+                </div>
+                <div class="title">
+                    <h1>ChatBuddy</h1>
+                    <p>Your AI Companion</p>
+                </div>
+            </div>
+
+            <div class="chat-history" id="chat-history">
+                <div class="message bot-message">
+                    <div class="message-content">
+                        Hello! I'm your AI assistant. How can I help you today?
+                    </div>
+                    <div class="message-time">Just now</div>
+                </div>
+            </div>
+
+            <div class="chat-input-area">
+                <div class="input-wrapper">
+                    <textarea id="user-input" placeholder="Type your message here..." rows="1"></textarea>
+                    <button id="send-btn">
+                        <i class="fa-solid fa-paper-plane"></i>
+                    </button>
+                </div>
+                <div class="api-key-status">
+                    <span id="key-status-text">Using Custom API Key</span>
+                    <button id="change-key-btn" onclick="clearApiKey()">Change Key</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- API Key Modal -->
+    <div id="api-key-modal" class="modal">
+        <div class="modal-content">
+            <h2><i class="fa-solid fa-key"></i> Enter Google API Key</h2>
+            <p>To use this chatbot, you need your own Google Gemini API Key.</p>
+
+            <div class="instruction-box">
+                <h3>How to get a key:</h3>
+                <ol>
+                    <li>Go to <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio <i
+                                class="fa-solid fa-external-link-alt"></i></a></li>
+                    <li>Click <strong>"Create API key"</strong></li>
+                    <li>Copy the key and paste it below</li>
+                </ol>
+            </div>
+
+            <div class="input-group">
+                <input type="password" id="api-key-input" placeholder="Paste your API Key here (AIza...)">
+                <div id="validation-msg" class="validation-message"></div>
+                <button id="save-key-btn">Start Chatting</button>
+            </div>
+            <p class="security-note"><i class="fa-solid fa-shield-alt"></i> Your key is stored locally in your browser
+                and never saved on our servers.</p>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+
+</html>
